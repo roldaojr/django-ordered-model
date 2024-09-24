@@ -39,7 +39,7 @@ class OrderedModelQuerySet(models.QuerySet):
 
     def get_next_order(self):
         order = self.get_max_order()
-        return order + 1 if order is not None else 0
+        return order + 1 if order is not None else 1
 
     def above(self, order, inclusive=False):
         """Filter items above order."""
@@ -125,6 +125,7 @@ class OrderedModelBase(models.Model):
     def __init__(self, *args, **kwargs):
         super(OrderedModelBase, self).__init__(*args, **kwargs)
         self._original_wrt_map = self._wrt_map()
+        self._original_order = getattr(self, self.order_field_name)
 
     def _wrt_map(self):
         d = {}
@@ -209,15 +210,35 @@ class OrderedModelBase(models.Model):
     def save(self, *args, **kwargs):
         order_field_name = self.order_field_name
         wrt_changed = self._wrt_map() != self._original_wrt_map
+        order = getattr(self, order_field_name)
+        qs: OrderedModelQuerySet
 
-        if wrt_changed and getattr(self, order_field_name) is not None:
+        if wrt_changed and order is not None:
             # do delete-like upshuffle using original_wrt values!
             qs = self.get_ordering_queryset(wrt=self._original_wrt_map)
             qs.above_instance(self).decrease_order()
 
-        if getattr(self, order_field_name) is None or wrt_changed:
-            order = self.get_ordering_queryset().get_next_order()
+        if order is None or wrt_changed:
+            qs = self.get_ordering_queryset()
+            order = qs.get_next_order()
             setattr(self, order_field_name, order)
+
+        if (
+            self._original_order is not None
+            and order is not None
+            and self._original_order != order
+        ):
+            qs = self.get_ordering_queryset()
+            # need update order
+            if order > self._original_order:
+                qs.above(self._original_order).below(
+                    order, inclusive=True
+                ).decrease_order()
+            else:
+                qs.below(self._original_order).above(
+                    order, inclusive=True
+                ).increase_order()
+
         super().save(*args, **kwargs)
 
         self._original_wrt_map = self._wrt_map()
@@ -315,7 +336,7 @@ class OrderedModelBase(models.Model):
         if getattr(self, order_field_name) == getattr(ref, order_field_name):
             return
         if getattr(self, order_field_name) > getattr(ref, order_field_name):
-            o = self.get_ordering_queryset().above_instance(ref).get_min_order() or 0
+            o = self.get_ordering_queryset().above_instance(ref).get_min_order() or 1
         else:
             o = getattr(ref, order_field_name)
         self.to(o, extra_update=extra_update)
