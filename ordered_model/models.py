@@ -212,20 +212,21 @@ class OrderedModelBase(models.Model):
         wrt_changed = self._wrt_map() != self._original_wrt_map
         order = getattr(self, order_field_name)
         qs: OrderedModelQuerySet
+        has_order = order is not None and order != 0
 
-        if wrt_changed and order is not None:
+        if wrt_changed and has_order:
             # do delete-like upshuffle using original_wrt values!
             qs = self.get_ordering_queryset(wrt=self._original_wrt_map)
             qs.above_instance(self).decrease_order()
 
-        if order is None or wrt_changed:
+        if not has_order or wrt_changed:
             qs = self.get_ordering_queryset()
             order = qs.get_next_order()
             setattr(self, order_field_name, order)
 
         if (
             self._original_order is not None
-            and order is not None
+            and has_order
             and self._original_order != order
         ):
             qs = self.get_ordering_queryset()
